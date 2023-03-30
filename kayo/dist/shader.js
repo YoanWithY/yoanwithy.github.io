@@ -25,6 +25,12 @@ class Shader {
     static loadProjectionMatrix(mat) {
         gl.bufferSubData(gl.UNIFORM_BUFFER, 0, new Float32Array(mat));
     }
+    static updateView(view) {
+        gl.bindBuffer(gl.UNIFORM_BUFFER, Shader.viewUB);
+        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, new Float32Array(view.getProjectionMatrix().concat(view.getViewMatrix()).concat(view.getWorldLocation())));
+        gl.bindBuffer(gl.UNIFORM_BUFFER, null);
+        gl.viewport(0, 0, view.framebuffer.width, view.framebuffer.height);
+    }
     static loadViewMatrix(mat) {
         gl.bufferSubData(gl.UNIFORM_BUFFER, 64, new Float32Array(mat));
     }
@@ -118,7 +124,9 @@ Shader.defaultVertexShaderCode = `#version 300 es
 Shader.defaultFragmentShaderCode = `#version 300 es
 
     precision highp float;
+    precision highp int;
     
+    uniform uint index;
     uniform sampler2D albedo;
     
     in vec3 localspace_vertex_normal;
@@ -130,7 +138,8 @@ Shader.defaultFragmentShaderCode = `#version 300 es
     in vec2 TC;
     in vec3 barycentric;
 
-    out vec4 outColor;
+    layout(location = 0) out vec4 outColor;
+    layout(location = 1) out uint objectIndex;
     vec3 ls_v_N, ws_v_N, cs_v_N;
     
     void main(){
@@ -139,7 +148,7 @@ Shader.defaultFragmentShaderCode = `#version 300 es
         cs_v_N = normalize(cameraspace_vertex_normal);
 
         outColor = vec4(texture(albedo, TC).rgb, 1);
-        
+        objectIndex = index; 
     }`;
 Shader.modelTransformationUB = gl.createBuffer();
 Shader.viewUB = gl.createBuffer();
@@ -164,10 +173,6 @@ function setupCanvas() {
     if (glCanvas.width != width || glCanvas.height != height) {
         glCanvas.width = width * dpr;
         glCanvas.height = height * dpr;
-        gl.viewport(0, 0, glCanvas.width, glCanvas.height);
-        gl.bindBuffer(gl.UNIFORM_BUFFER, Shader.viewUB);
-        Shader.loadProjectionMatrix(mat4.perspective(60, width / height, 0.1, 1000));
-        gl.bindBuffer(gl.UNIFORM_BUFFER, null);
     }
 }
 window.addEventListener('resize', setupCanvas);

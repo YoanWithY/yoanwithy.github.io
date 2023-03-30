@@ -71,11 +71,12 @@ class Grid3D {
             weight.push(0, 1, 255, 1, 0, 1, 0, 1, 255, 1, 0, 1);
         }
     }
-    static prep(wl) {
+    static prep(view) {
         gl.enable(gl.RASTERIZER_DISCARD);
         gl.useProgram(this.lineGenShader.program);
+        const wl = view.getWorldLocation();
         this.lineGenShader.loadVec3(0, wl[0], wl[1], wl[2]);
-        this.lineGenShader.loadVec2(1, (this.lineWidth * window.devicePixelRatio + 1) / glCanvas.clientWidth / window.devicePixelRatio, (this.lineWidth * window.devicePixelRatio + 1) / glCanvas.clientHeight / window.devicePixelRatio);
+        this.lineGenShader.loadVec2(1, (this.lineWidth * window.devicePixelRatio + 1) / view.framebuffer.width, (this.lineWidth * window.devicePixelRatio + 1) / view.framebuffer.height);
         gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.TF);
         gl.beginTransformFeedback(gl.POINTS);
         gl.bindVertexArray(this.dataVAO);
@@ -87,17 +88,18 @@ class Grid3D {
         gl.disable(gl.RASTERIZER_DISCARD);
     }
     static render() {
-        gl.enable(gl.BLEND);
         gl.depthMask(false);
-        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.SRC_ALPHA, gl.ONE);
         gl.useProgram(this.renderShader.program);
         this.renderShader.loadf(0, (this.lineWidth * window.devicePixelRatio + 1) / 2);
         gl.bindVertexArray(this.VAO);
+        gl.enable(gl.BLEND);
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ONE, gl.ONE);
+        gl.blendEquationSeparate(gl.MAX, gl.MAX);
         gl.drawElements(gl.TRIANGLES, this.count, gl.UNSIGNED_SHORT, 0);
+        gl.disable(gl.BLEND);
         gl.bindVertexArray(null);
         gl.useProgram(null);
         gl.depthMask(true);
-        gl.disable(gl.BLEND);
     }
 }
 _a = Grid3D;
@@ -151,7 +153,7 @@ Grid3D.vertexShaderCode = `#version 300 es
     }
 
     #define ${debudHint}
-    #define AXIS_COLOR vec4(0.2, 0.2, 0.2, 1.0)
+    #define AXIS_COLOR vec4(0.4, 0.4, 0.4, 1.0)
     #define RED vec4(1.0, 0.0, 0.0, 1.0)
     #define GREEN vec4(0.0, 1.0, 0.0, 1.0)
 
@@ -177,7 +179,7 @@ Grid3D.vertexShaderCode = `#version 300 es
         #else 
         bool isXAxis = isXAxis(worldPos), isYAxis = isYAxis(worldPos);
         color = isXAxis ? RED : isYAxis ? GREEN : AXIS_COLOR;
-        maxFade = (isLarge(worldPos) ? 1500.0 : isMedium(worldPos) ? ${(_a.majorRange * 1.5).toFixed(1)} :  ${(_a.minorRange * 1.6).toFixed(1)}) * sqrt(linearStep(0.0, 32.0, abs(cameraPosition.z))); 
+        maxFade = (isLarge(worldPos) ? 1500.0 : isMedium(worldPos) ? ${(_a.majorRange * 1.5).toFixed(1)} :  ${(_a.minorRange * 1.5).toFixed(1)}) * sqrt(linearStep(0.0, 16.0, abs(cameraPosition.z))); 
 
         #endif
 
@@ -211,6 +213,7 @@ Grid3D.fragmentShaderCode = `#version 300 es
         float ff2 = ff * ff;
         #ifndef DEBUG
         outColor.a *= min(wp, 1.0) * ff2 * ff2;
+        outColor.rgb *= outColor.a;
         #endif
     }`;
 Grid3D.TF = gl.createTransformFeedback();
@@ -263,7 +266,6 @@ Grid3D.renderShader = new Shader(_a.vertexShaderCode, _a.fragmentShaderCode, ["p
     for (let i = 0; i < _a.numLineSegments * 6; i += 6)
         ind.push(i, i + 1, i + 3, i + 3, i + 1, i + 4, i + 1, i + 2, i + 4, i + 4, i + 2, i + 5);
     _a.count = ind.length;
-    console.log(_a.numLineSegments * 6);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, _a.IBO);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(ind), gl.STATIC_DRAW);
     gl.bindVertexArray(null);
