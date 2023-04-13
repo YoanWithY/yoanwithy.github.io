@@ -4,7 +4,13 @@ const ubView = `layout(std140) uniform view {
     mat4 projectionMat;
     mat4 viewMat;
     vec4 cameraPosition;
+    ivec4 viewport;
 };`;
+const maxModelMats = 1024;
+const ubTransform = `layout(std140) uniform model{
+    mat4 modelMat[${maxModelMats}];
+  };
+`;
 class Shader {
     constructor(vs, fs, uniforms, transformFeedbackVarings, bufferMode) {
         this.uniformLocations = [];
@@ -27,7 +33,9 @@ class Shader {
     }
     static updateView(view) {
         gl.bindBuffer(gl.UNIFORM_BUFFER, Shader.viewUB);
-        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, new Float32Array(view.getProjectionMatrix().concat(view.getViewMatrix()).concat(view.getWorldLocation())));
+        const fl = new Float32Array([...view.getProjectionMatrix(), ...view.getViewMatrix(), ...view.getWorldLocation(), 0]);
+        gl.bufferSubData(gl.UNIFORM_BUFFER, 0, fl);
+        gl.bufferSubData(gl.UNIFORM_BUFFER, fl.byteLength, new Int32Array(view.getGLViewport()));
         gl.bindBuffer(gl.UNIFORM_BUFFER, null);
         gl.viewport(0, 0, view.framebuffer.width, view.framebuffer.height);
     }
@@ -61,7 +69,8 @@ class Shader {
         gl.compileShader(shader);
         if (gl.getShaderParameter(shader, gl.COMPILE_STATUS))
             return shader;
-        console.log(gl.getShaderInfoLog(shader));
+        console.error("Could not compile " + source);
+        console.error(gl.getShaderInfoLog(shader));
         gl.deleteShader(shader);
         throw undefined;
     }
@@ -79,43 +88,53 @@ class Shader {
         throw undefined;
     }
 }
-Shader.numModelMats = 1024;
 Shader.defaultVertexShaderCode = `#version 300 es
 
-    in vec3 inPos;
-    in vec3 inNor;
-    in vec2 inTc;   
+    layout(location = 0) in vec3 inPos;
+    layout(location = 1) in vec3 inFaceNor;
+    layout(location = 2) in vec3 inVertNor;
+    layout(location = 3) in vec2 inTc;   
     
+    out vec3 localspace_face_normal;
+    out vec3 worldspace_face_normal;
+    out vec3 cameraspace_face_normal;
+
     out vec3 localspace_vertex_normal;
     out vec3 worldspace_vertex_normal;
     out vec3 cameraspace_vertex_normal;
+
     out vec3 localspace_position;
     out vec3 worldspace_position;
     out vec3 cameraspace_position;
+
     out vec2 TC;
     out vec3 barycentric;
     
-   ${ubView}
-
-    layout(std140) uniform model{
-      mat4 modelMat[${Shader.numModelMats}];
-    };
+    ${ubView}
+    ${ubTransform}
 
     uniform uint index;
 
     const vec3 barycentrics[3] = vec3[](vec3(1, 0, 0), vec3(0, 1, 0), vec3(0, 0, 1));
     
     void main(){
+        mat4 mMat = modelMat[index]; 
+
         localspace_position = inPos;
-        worldspace_position = (modelMat[index] * vec4(localspace_position, 1)).xyz;
+        worldspace_position = (mMat * vec4(localspace_position, 1)).xyz;
         cameraspace_position = (viewMat * vec4(worldspace_position, 1)).xyz;
         gl_Position = projectionMat * vec4(cameraspace_position, 1);
         
-        localspace_vertex_normal = inNor;
-        mat3 nmMat = mat3(transpose(inverse(modelMat[index])));
+        mat3 nmMat = mat3(transpose(inverse(mMat))); 
+        mat3 nvMat = mat3(transpose(inverse(viewMat * mMat)));
+
+        localspace_face_normal = inFaceNor;
+        worldspace_face_normal = normalize(nmMat * localspace_face_normal);
+        cameraspace_face_normal = normalize(nvMat * inFaceNor);
+
+        localspace_vertex_normal = inVertNor;
         worldspace_vertex_normal = normalize(nmMat * localspace_vertex_normal);
-        mat3 nvMat = mat3(transpose(inverse(viewMat * modelMat[index])));
-        cameraspace_vertex_normal = normalize(nvMat * inNor);
+        cameraspace_vertex_normal = normalize(nvMat * inVertNor);
 
         TC = inTc;
         barycentric = barycentrics[gl_VertexID % 3];
@@ -128,36 +147,72 @@ Shader.defaultFragmentShaderCode = `#version 300 es
     
     uniform uint index;
     uniform sampler2D albedo;
+
+    in vec3 localspace_face_normal;
+    in vec3 worldspace_face_normal;
+    in vec3 cameraspace_face_normal;
     
     in vec3 localspace_vertex_normal;
     in vec3 worldspace_vertex_normal;
     in vec3 cameraspace_vertex_normal;
+
     in vec3 localspace_position;
     in vec3 worldspace_position;
     in vec3 cameraspace_position;
+
     in vec2 TC;
     in vec3 barycentric;
 
     layout(location = 0) out vec4 outColor;
     layout(location = 1) out uint objectIndex;
-    vec3 ls_v_N, ws_v_N, cs_v_N;
+    vec3 ls_v_N, ws_v_N, cs_v_N, ls_f_N, ws_f_N, cs_f_N;
     
     void main(){
+        ls_f_N = normalize(localspace_face_normal);
+        ws_f_N = normalize(worldspace_face_normal);
+        cs_f_N = normalize(cameraspace_face_normal);
+
         ls_v_N = normalize(localspace_vertex_normal);
         ws_v_N = normalize(worldspace_vertex_normal);
         cs_v_N = normalize(cameraspace_vertex_normal);
 
         outColor = vec4(texture(albedo, TC).rgb, 1);
+        outColor = vec4(ws_v_N, 1);
         objectIndex = index; 
     }`;
+Shader.geometryOnlyVertexShaderCode = `#version 300 es
+
+    in vec3 inPos;
+    
+    ${ubView}
+    ${ubTransform}
+
+    uniform uint index;
+    
+    void main(){
+        gl_Position = projectionMat * viewMat * modelMat[index] * vec4(inPos, 1);
+    }`;
+Shader.indexOutputFragmentShaderCode = `#version 300 es
+
+    precision highp float;
+    precision highp int;
+    
+    uniform uint index;
+
+    layout(location = 0) out uint outIndex;
+    
+    void main(){
+        outIndex = index; 
+    }
+    `;
 Shader.modelTransformationUB = gl.createBuffer();
 Shader.viewUB = gl.createBuffer();
 Shader.gridDataBuffer = gl.createBuffer();
 (() => {
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 0, Shader.viewUB);
-    gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array(2 * 16 + 4), gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array(2 * 16 + 8), gl.DYNAMIC_DRAW);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 1, Shader.modelTransformationUB);
-    gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array(Shader.numModelMats * 16), gl.DYNAMIC_DRAW);
+    gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array(maxModelMats * 16), gl.DYNAMIC_DRAW);
     gl.bindBufferBase(gl.UNIFORM_BUFFER, 2, Shader.gridDataBuffer);
     gl.bufferData(gl.UNIFORM_BUFFER, new Float32Array(2 * 2 * 64 * 16), gl.DYNAMIC_DRAW);
     gl.bindBuffer(gl.UNIFORM_BUFFER, null);
